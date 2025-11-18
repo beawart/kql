@@ -1,0 +1,26 @@
+// Resource Health events for a specific VM between 13 Oct and 15 Oct 2025 (inclusive)
+let startTime = datetime(2025-09-30T00:00:00Z);
+let endTime   = datetime(2025-10-26T23:59:59Z);
+AzureActivity
+| where TimeGenerated between (startTime .. endTime)
+| where CategoryValue == "ResourceHealth"
+// ---- Target your VM (choose ONE of the filters below) ----
+// Exact ResourceId match (recommended if you know it):
+// | where ResourceId == "/subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.Compute/virtualMachines/<vm-name>"
+// OR name-based fuzzy match (handy if multiple RGs/subs):
+// ---- Parse health details from Properties JSON ----
+| extend props = parse_json(Properties)
+| extend availabilityState = tostring(props.availabilityState)     // e.g., Available, Unavailable, Degraded
+       , reasonType        = tostring(props.reasonType)            // e.g., PlatformInitiated, UserInitiated
+       , incidentId        = tostring(props.incidentId)
+       , rootCauseAt       = tostring(props.occurredTime)          // when Azure says it started
+       , resolvedAt        = tostring(props.resolvedTime)          // when Azure says it ended (if any)
+       , impactedServices  = tostring(props.impactedServices)
+       , summary           = coalesce(tostring(props.summary), tostring(props), "")
+// ---- Tidy selection of useful columns ----
+| project TimeGenerated,
+          availabilityState, reasonType, summary,
+          ResourceId, OperationNameValue, ActivityStatusValue,
+          incidentId, rootCauseAt, resolvedAt, impactedServices,
+          SubscriptionId, ResourceGroup, Caller
+| order by TimeGenerated desc
