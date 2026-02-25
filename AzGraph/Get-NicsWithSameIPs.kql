@@ -1,0 +1,5 @@
+resources 
+| where type =~ 'microsoft.network/networkinterfaces' 
+| mv-expand ipConfigurations = properties.ipConfigurations 
+| project name, ipAddress = ipConfigurations.properties.privateIPAddress 
+| where ipAddress startswith "10.185.69"

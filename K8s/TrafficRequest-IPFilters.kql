@@ -1,0 +1,18 @@
+//Using Client IP address to monitor all the requests coming into the Kube service
+ContainerLogV2
+| where TimeGenerated > ago(15m)
+| extend j = parse_json(LogMessage)
+| extend recvHeader = tostring(j.transactionElement.protocolInfo.recvHeader)
+// Extract the value after "True-Client-IP:" up to the line break
+| extend TrueClientIP = trim(@"\s", extract(@"(?i)True-Client-IP:\s*([^\r\n]+)", 1, recvHeader))
+// Status from the JSON http block
+| extend StatusCode = toint(j.transactionElement.protocolInfo.http.status)
+| where isnotempty(TrueClientIP)
+| where TrueClientIP contains "122.150.102.53"
+| project TimeGenerated,
+          correlationId = tostring(j.correlationId),
+          method        = tostring(j.transactionElement.protocolInfo.http.method),
+          uri           = tostring(j.transactionElement.protocolInfo.http.uri),
+          TrueClientIP,
+          StatusCode
+| order by TimeGenerated desc

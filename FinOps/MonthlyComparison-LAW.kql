@@ -1,0 +1,23 @@
+// === Months to compare ===
+let monthA_start = datetime(2025-07-01);
+let monthA_end   = endofmonth(monthA_start);
+let monthB_start = datetime(2025-08-01);
+let monthB_end   = endofmonth(monthB_start);
+// === Base dataset for both months ===
+let base =
+    Usage
+    | where IsBillable == true
+    | where TimeGenerated between (monthA_start .. monthA_end)
+       or   TimeGenerated between (monthB_start .. monthB_end)
+    | extend Month = format_datetime(startofmonth(TimeGenerated), "yyyy-MM");
+// === Top 5 DataTypes by total GB across the two months ===
+let TopDataTypes =
+    base
+    | summarize TotalGB = sum(Quantity) / 1024 by DataType   // Quantity is in MB; /1024 → GB [1](https://github.com/CloudNationHQ/terraform-azure-dcr/blob/main/README.md)
+    | top 5 by TotalGB desc;
+// === Compare months (clustered columns) ===
+base
+| where DataType in (TopDataTypes | project DataType)        // subquery returns a scalar column list [2](https://www.red-gate.com/simple-talk/blogs/creating-kusto-sub-queries/)
+| summarize GB = sum(Quantity) / 1024 by DataType, Month     // Usage has Quantity (MB) & DataType columns [1](https://github.com/CloudNationHQ/terraform-azure-dcr/blob/main/README.md)
+| order by DataType asc, Month asc
+| render columnchart with (title = "Top 5 DataTypes — Monthly ingestion (GB) comparison")

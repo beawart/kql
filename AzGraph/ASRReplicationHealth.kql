@@ -1,0 +1,17 @@
+RecoveryServicesResources
+| where type =~ "microsoft.recoveryservices/vaults/replicationfabrics/replicationprotectioncontainers/replicationprotecteditems"
+| extend props = parse_json(properties)
+| extend replicationHealth = tostring(props.replicationHealth)
+| extend vmName = tostring(props.friendlyName)
+| mv-expand healthErrors = props.healthErrors
+| extend errorMessage = tostring(healthErrors.errorMessage)
+| where replicationHealth != "Normal"
+// Exclude specific non-actionable errors
+| where not(
+    errorMessage has "not found." 
+    or errorMessage has "is powered off." 
+    or (errorMessage has "Resource group" and errorMessage has "was not found")
+    or errorMessage has "No successful test failover has been done"
+)
+// Group all error messages per VM into one record
+| summarize errorMessages = make_set(errorMessage) by vmName, replicationHealth, resourceGroup, subscriptionId

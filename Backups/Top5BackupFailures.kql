@@ -1,0 +1,79 @@
+// Previous full month window
+let startPrev = startofmonth(now() - 31d);
+let endPrev   = startofmonth(now());
+// Case 1: IaaSVM + MAB
+let iaas_mab =
+    AddonAzureBackupJobs
+    | where TimeGenerated between (startPrev .. endPrev - 1ms)
+    | where JobStatus == "Failed" and JobOperation == "Backup"
+    | where BackupManagementType in ("IaaSVM","MAB")
+    | extend Resource = extract(@"([^;]+;[^;]+)$", 1, tostring(BackupItemUniqueId)) // HOST;ITEM
+    | project TimeGenerated, JobOperationSubType, BackupManagementType, BackupItemUniqueId,
+              Resource, DatasourceFriendlyName, _ResourceId, ResourceId, JobFailureCode;
+// Case 2: Disks (allow empty BackupManagementType)
+let disks =
+    AddonAzureBackupJobs
+    | where TimeGenerated between (startPrev .. endPrev - 1ms)
+    | where JobStatus == "Failed" and JobOperation == "Backup"
+    | where isempty(BackupManagementType) or BackupManagementType == ""
+    | where DatasourceType == "Microsoft.Compute/disks"
+    | extend Resource = tostring(DatasourceFriendlyName)                   // friendly disk name
+    | project TimeGenerated, JobOperationSubType, BackupManagementType, BackupItemUniqueId,
+              Resource, DatasourceFriendlyName, _ResourceId, ResourceId, JobFailureCode;
+// Case 3: AzureWorkload (arg_max)
+let azure_workload =
+    AddonAzureBackupJobs
+    | where TimeGenerated between (startPrev .. endPrev - 1ms)
+    | summarize arg_max(TimeGenerated, *) by BackupItemUniqueId, JobOperationSubType
+    | where JobStatus == "Failed" and JobOperation == "Backup" and BackupManagementType in ("AzureWorkload")
+    | extend Resource = extract(@"([^;]+;[^;]+;[^;]+)$", 1, tostring(BackupItemUniqueId)) // HOST;WORKLOAD;ITEM
+    | project TimeGenerated, JobOperationSubType, BackupManagementType, BackupItemUniqueId,
+              Resource, DatasourceFriendlyName, _ResourceId, ResourceId, JobFailureCode;
+// Combine & normalize
+let base =
+union iaas_mab, disks, azure_workload
+// Exclude CB Engine connectivity codes (both spellings)
+| where isempty(JobFailureCode)
+       or not(tolower(tostring(JobFailureCode)) in ("cannonconnecttocbengine","cannotconnecttocbengine"))
+// Ensure Resource not empty
+| extend Resource = iff(isempty(Resource),
+                        coalesce(tostring(DatasourceFriendlyName),
+                                 substring(tostring(BackupItemUniqueId), max_of(0, strlen(tostring(BackupItemUniqueId)) - 50), 50)),
+                        Resource)
+// Parse vault name
+| extend rid = tostring(coalesce(_ResourceId, ResourceId))
+| extend VaultName = extract(@"/vaults/([^/]+)", 1, tolower(rid))
+// Derive Host/Item with regex (no arrays)
+| extend Host_AW = extract(@"^([^;]+);[^;]+;[^;]+$", 1, Resource),
+         Item_AW = extract(@"([^;]+)$", 1, Resource),
+         Host_VM = extract(@"^([^;]+);[^;]+$", 1, Resource),
+         Item_VM = extract(@"([^;]+)$", 1, Resource),
+         Host_Disk = "",
+         Item_Disk = Resource
+| extend Host = case(
+            BackupManagementType == "AzureWorkload", Host_AW,
+            BackupManagementType in ("IaaSVM","MAB"), Host_VM,
+            Host_Disk
+        ),
+         Item = case(
+            BackupManagementType == "AzureWorkload", Item_AW,
+            BackupManagementType in ("IaaSVM","MAB"), Item_VM,
+            Item_Disk
+        )
+| extend LabelBase = case(
+            not(isempty(Host)) and not(isempty(Item)), strcat(Host, " / ", Item),
+            not(isempty(Resource)), Resource,
+            "unknown"
+        )
+| extend Label = strcat(LabelBase, " (", BackupManagementType, "/", JobOperationSubType, ") — ", VaultName);
+// Compute Top‑5 with percentages and render pie
+let summary =
+    base
+    | summarize Failures = count() by Label
+    | top 5 by Failures desc;
+summary
+| extend TotalFailures = toscalar(summary | summarize sum(Failures))
+| extend Pct = round(100.0 * todouble(Failures) / todouble(TotalFailures), 1)
+| extend LabelWithPct = strcat(Label, " — ", Pct, "%")
+| project LabelWithPct, Failures
+| render piechart with (title = "Top 5 Backup Failures — Previous Month")

@@ -1,0 +1,15 @@
+// Automatic date calc to get full month
+let lastmonthNumber = getmonth(datetime(now)) - 1;
+let lastmonth = iff(lastmonthNumber == 0, 12, lastmonthNumber);
+let year = getyear(datetime(now)) - iff(lastmonth == 12, 1, 0);
+let dateStart = make_datetime(year, lastmonth, 01);
+let dateEnd = endofmonth(dateStart);
+let numberofDays = datetime_diff('day', datetime_add('month', 1, dateStart), dateStart);
+_AzureBackup_GetJobs(dateStart, dateEnd)
+// query to transform function output
+| extend success=iff((Status == "Completed" or Status == "CompletedWithWarnings") , 1 , 0)
+| extend record = iff(UniqueId != "", 1, 0)  // to be used for total row count
+| summarize SuccessfulCount =sum(success), TotalCount=sum(record) by BackupSolution
+| extend JobSuccessPercentage = (SuccessfulCount*100)/todouble(TotalCount)
+| project-away SuccessfulCount, TotalCount
+| project BackupSolution, round(JobSuccessPercentage,2)

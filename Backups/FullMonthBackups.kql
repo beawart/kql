@@ -1,0 +1,14 @@
+// Automatic date calc to get full month
+let lastmonthNumber = getmonth(datetime(now)) - 1;
+let lastmonth = iff(lastmonthNumber == 0, 12, lastmonthNumber);
+let year = getyear(datetime(now)) - iff(lastmonth == 12, 1, 0);
+let dateStart = make_datetime(year, lastmonth, 01);
+let dateEnd = endofmonth(dateStart);
+let numberofDays = datetime_diff('day', datetime_add('month', 1, dateStart), dateStart);
+AddonAzureBackupJobs
+| where TimeGenerated between (dateStart .. dateEnd)
+| where JobStatus == "Completed"
+| where JobOperation == "Backup"
+| where BackupManagementType == "IaaSVM" 
+| summarize Backups=count() by BackupItemUniqueId
+| project VMs = split(BackupItemUniqueId, ";")[-1], Backups, Percentage = round(Backups * 100.0 / numberofDays, 3)
