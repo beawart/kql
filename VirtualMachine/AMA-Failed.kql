@@ -1,0 +1,20 @@
+// AMA VM extensions that are not in 'Succeeded', excluding VMs that are shut down
+resources
+| where type =~ 'microsoft.compute/virtualmachines/extensions'
+| where tostring(properties.publisher) =~ 'Microsoft.Azure.Monitor'
+| where tostring(properties.type) in~ ('AzureMonitorWindowsAgent','AzureMonitorLinuxAgent')
+| extend vmId = tostring(split(id, '/extensions/')[0]),
+         extType = tostring(properties.type),
+         provState = tolower(tostring(properties.provisioningState))
+| where provState !in ('succeeded')  // shows Failed, Creating, Updating, etc.
+| join kind=leftouter (
+    resources
+    | where type =~ 'microsoft.compute/virtualmachines'
+    | extend powerState = tostring(properties.extended.instanceView.powerState.code)
+    | project vmId=id, vmName=name, vmLocation=location, powerState
+) on vmId
+| where isnotempty(vmName)                               // ensure we matched a VM\
+| where powerState !in ('PowerState/stopped','PowerState/deallocated') // exclude shut down VMs
+| project subscriptionId, resourceGroup, vmName, vmLocation,
+          extName=name, extType, provState, powerState
+| order by resourceGroup asc, vmName asc
